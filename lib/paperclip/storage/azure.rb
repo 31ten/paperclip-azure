@@ -1,6 +1,5 @@
 require 'azure/storage'
 require 'paperclip/storage/azure/environment'
-require 'pry'
 
 module Paperclip
   module Storage
