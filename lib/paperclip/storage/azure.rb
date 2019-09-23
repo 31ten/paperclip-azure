@@ -82,16 +82,17 @@ module Paperclip
         end unless Paperclip::Interpolations.respond_to? :asset_host
       end
 
-      def expiring_url(time = 3600, style_name = default_style)
+      def expiring_url(time = 36000, style_name = default_style)
         if path(style_name)
           uri = URI azure_uri(style_name)
           generator = ::Azure::Storage::Core::Auth::SharedAccessSignature.new azure_account_name,
                                                                               azure_credentials[:storage_access_key]
-          generator.signed_uri uri, false, service:      'b',
-                                           resource:     'b',
-                                           permissions:  'r',
-                                           start:        (Time.now - (5 * 60)).utc.iso8601,
-                                           expiry:       (Time.now + time).utc.iso8601
+          test = generator.signed_uri uri, false, service:      'b',
+                                                  resource:     'b',
+                                                  permissions:  'r',
+                                                  start:        (Time.now - (5 * 60)).strftime('%A %b %d %T %Y'),
+                                                  expiry:       (Time.now + time.to_i).strftime('%A %b %d %T %Y')
+          test
         else
           url(style_name)
         end
@@ -150,7 +151,7 @@ module Paperclip
       end
 
       def azure_uri(style_name = default_style)
-        "https://#{azure_base_url}/#{path(style_name).gsub(%r{\A/}, '')}"
+        "https://#{azure_base_url}/#{container_name}/#{path(style_name).gsub(%r{\A/}, '')}"
       end
 
       def azure_base_url
@@ -226,7 +227,6 @@ module Paperclip
       def save_blob(container_name, storage_path, file, write_options)
         if file.size < 64.megabytes
           azure_interface.create_block_blob container_name, storage_path, file.read, write_options
-          puts 'we have saved the blob'
         else
           blocks = []; count = 0
           while data = file.read(4.megabytes)
