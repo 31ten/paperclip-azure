@@ -81,17 +81,17 @@ module Paperclip
         end unless Paperclip::Interpolations.respond_to? :asset_host
       end
 
-      def expiring_url(time = 3600, style_name = default_style)
+      def expiring_url(time = 36000, style_name = default_style)
         if path(style_name)
           uri = URI azure_uri(style_name)
           generator = ::Azure::Storage::Core::Auth::SharedAccessSignature.new azure_account_name,
                                                                               azure_credentials[:storage_access_key]
-
-          generator.signed_uri uri, false, service:      'b',
-                                           resource:     'b',
-                                           permissions:  'r',
-                                           start:        (Time.now - (5 * 60)).utc.iso8601,
-                                           expiry:       (Time.now + time).utc.iso8601
+          test = generator.signed_uri uri, false, service:      'b',
+                                                  resource:     'b',
+                                                  permissions:  'r',
+                                                  start:        (Time.now - (5 * 60)).strftime('%A %b %d %T %Y'),
+                                                  expiry:       (Time.now + time.to_i).strftime('%A %b %d %T %Y')
+          test
         else
           url(style_name)
         end
@@ -126,7 +126,6 @@ module Paperclip
           [:storage_account_name, :storage_access_key, :container].each do |opt|
             config[opt] = azure_credentials[opt] if azure_credentials[opt]
           end
-
           obtain_azure_instance_for(config.merge(@azure_options))
         end
       end
@@ -137,17 +136,16 @@ module Paperclip
         [:storage_account_name, :storage_access_key].each do |opt|
           config[opt] = azure_credentials[opt] if azure_credentials[opt]
         end
-
+        config.merge!({storage_blob_host: azure_blob_url})
         @azure_storage_client ||= ::Azure::Storage::Client.create config
       end
 
       def obtain_azure_instance_for(options)
         instances = (Thread.current[:paperclip_azure_instances] ||= {})
-        return instances[options] if instance[options]
+        # return instances[options] if instance[options]
 
         service = ::Azure::Storage::Blob::BlobService.new(client: azure_storage_client)
         service.with_filter ::Azure::Storage::Core::Filter::ExponentialRetryPolicyFilter.new
-
         instances[options] = service
       end
 
@@ -157,6 +155,10 @@ module Paperclip
 
       def azure_base_url
         Environment.url_for azure_account_name, azure_credentials[:region]
+      end
+
+      def azure_blob_url
+        "https://#{azure_base_url}"
       end
 
       def azure_container
@@ -181,7 +183,8 @@ module Paperclip
           false
         end
       rescue ::Azure::Core::Http::HTTPError => e
-        raise unless e.status_code == 404
+        puts '########### we raise on exception'
+        raise e unless e.status_code == 404
 
         false
       end
@@ -192,7 +195,6 @@ module Paperclip
 
       def flush_writes #:nodoc:
         @queued_for_write.each do |style, file|
-          retries = 0
           begin
             log("saving #{path(style)}")
 
@@ -202,6 +204,7 @@ module Paperclip
 
             if azure_container
               save_blob container_name, path(style).sub(%r{\A/},''), file, write_options
+              puts '########### We did it yeah'
             end
           rescue ::Azure::Core::Http::HTTPError => e
             if e.status_code == 404
@@ -221,7 +224,6 @@ module Paperclip
       end
 
       def save_blob(container_name, storage_path, file, write_options)
-
         if file.size < 64.megabytes
           azure_interface.create_block_blob container_name, storage_path, file.read, write_options
         else
@@ -229,7 +231,7 @@ module Paperclip
           while data = file.read(4.megabytes)
             block_id = "block_#{(count += 1).to_s.rjust(5, '0')}"
 
-            azure_interface.create_blob_block container_name, storage_path, block_id, data
+            azure_interface.put_blob_block container_name, storage_path, block_id, data
 
             blocks << [block_id]
           end
@@ -254,7 +256,7 @@ module Paperclip
       def copy_to_local_file(style, local_dest_path)
         log("copying #{path(style)} to local file #{local_dest_path}")
 
-        blob, content = azure_interface.get_blob(container_name, path(style).sub(%r{\A/},''))
+        _, content = azure_interface.get_blob(container_name, path(style).sub(%r{\A/},''))
 
         ::File.open(local_dest_path, 'wb') do |local_file|
           local_file.write(content)
